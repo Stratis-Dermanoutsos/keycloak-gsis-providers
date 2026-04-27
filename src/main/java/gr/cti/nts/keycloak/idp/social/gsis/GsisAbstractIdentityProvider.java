@@ -76,32 +76,36 @@ public abstract class GsisAbstractIdentityProvider
     java.lang.reflect.Method setIdpConfigMethod = null;
     java.lang.reflect.Method setIdpMethod = null;
 
+    // Detect Constructor (String vs IdentityProviderModel)
     try {
-      constructor = BrokeredIdentityContext.class
-        .getConstructor(org.keycloak.models.IdentityProviderModel.class);
+      // Keycloak 24+
+      constructor = BrokeredIdentityContext.class.getConstructor(org.keycloak.models.IdentityProviderModel.class);
       useNewApi = true;
-      log.infof("Using new BrokeredIdentityContext(IdentityProviderModel) constructor");
+      log.infof("Detected Modern BrokeredIdentityContext(IdentityProviderModel) constructor");
     } catch (NoSuchMethodException e) {
       try {
+        // Keycloak 22 and older
         constructor = BrokeredIdentityContext.class.getConstructor(String.class);
-        log.infof("Using old BrokeredIdentityContext(String) constructor");
-
-        try {
-          setIdpConfigMethod = BrokeredIdentityContext.class.getMethod("setIdpConfig",
-            OAuth2IdentityProviderConfig.class);
-        } catch (NoSuchMethodException ex) {}
+        log.infof("Detected Legacy BrokeredIdentityContext(String) constructor");
       } catch (NoSuchMethodException ex) {
         throw new RuntimeException("Could not find any compatible BrokeredIdentityContext constructor", ex);
       }
     }
 
-    // Try to find the setIdp method (it exists in old versions, gone in new ones)
+    // Detect setIdpConfig(IdentityProviderModel)
     try {
-      setIdpMethod = BrokeredIdentityContext.class.getMethod("setIdp",
-        org.keycloak.broker.provider.IdentityProvider.class);
-      log.infof("setIdp(IdentityProvider) method available");
+      setIdpConfigMethod = BrokeredIdentityContext.class.getMethod("setIdpConfig", org.keycloak.models.IdentityProviderModel.class);
+      log.infof("Detected setIdpConfig(IdentityProviderModel) method");
     } catch (NoSuchMethodException e) {
-      log.infof("setIdp(IdentityProvider) method NOT available (Modern Keycloak)");
+      log.infof("setIdpConfig method NOT available on this Keycloak version");
+    }
+
+    // Detect setIdp(IdentityProvider) - Was removed in v25.
+    try {
+      setIdpMethod = BrokeredIdentityContext.class.getMethod("setIdp", org.keycloak.broker.provider.IdentityProvider.class);
+      log.infof("Detected setIdp(IdentityProvider) method");
+    } catch (NoSuchMethodException e) {
+      log.infof("setIdp method NOT available (Modern Keycloak logic applies)");
     }
 
     USE_NEW_CONTEXT_API = useNewApi;
@@ -144,28 +148,23 @@ public abstract class GsisAbstractIdentityProvider
    * Older API: new BrokeredIdentityContext(String id) + setIdpConfig(config) Newer API: new
    * BrokeredIdentityContext(IdentityProviderModel) - no setIdpConfig
    */
-  private BrokeredIdentityContext createBrokeredIdentityContext(OAuth2IdentityProviderConfig config,
-      String username) {
+  private BrokeredIdentityContext createBrokeredIdentityContext(OAuth2IdentityProviderConfig config, String username) {
     try {
       BrokeredIdentityContext context;
-
       if (USE_NEW_CONTEXT_API) {
-        // New API: BrokeredIdentityContext(IdentityProviderModel)
         context = (BrokeredIdentityContext) CONTEXT_CONSTRUCTOR.newInstance(config);
       } else {
-        // Old API: BrokeredIdentityContext(String)
         context = (BrokeredIdentityContext) CONTEXT_CONSTRUCTOR.newInstance(username);
+      }
 
-        // Call setIdpConfig if the method exists
-        if (SET_IDP_CONFIG_METHOD != null) {
-          SET_IDP_CONFIG_METHOD.invoke(context, config);
-        }
+      // Use the reflected method to avoid signature mismatches
+      if (SET_IDP_CONFIG_METHOD != null) {
+        SET_IDP_CONFIG_METHOD.invoke(context, config);
       }
 
       return context;
     } catch (Exception e) {
-      throw new RuntimeException(
-          "Failed to create BrokeredIdentityContext for username: " + username, e);
+      throw new RuntimeException("Failed to create context via reflection", e);
     }
   }
 
@@ -180,7 +179,6 @@ public abstract class GsisAbstractIdentityProvider
     BrokeredIdentityContext user = createBrokeredIdentityContext(config, username);
 
     user.setId(username);
-
     user.setUsername(username);
     user.setFirstName(firstname);
     user.setLastName(lastname);
