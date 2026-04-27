@@ -68,41 +68,46 @@ public abstract class GsisAbstractIdentityProvider
   private static final boolean USE_NEW_CONTEXT_API;
   private static final java.lang.reflect.Constructor<?> CONTEXT_CONSTRUCTOR;
   private static final java.lang.reflect.Method SET_IDP_CONFIG_METHOD;
+  private static final java.lang.reflect.Method SET_IDP_METHOD;
 
   static {
     boolean useNewApi = false;
-    java.lang.reflect.Constructor<?> constructor = null;
+    java.lang.reflect.Constructor<?> constructor;
     java.lang.reflect.Method setIdpConfigMethod = null;
+    java.lang.reflect.Method setIdpMethod = null;
 
     try {
-      // Try new API: BrokeredIdentityContext(IdentityProviderModel)
       constructor = BrokeredIdentityContext.class
-          .getConstructor(org.keycloak.models.IdentityProviderModel.class);
+        .getConstructor(org.keycloak.models.IdentityProviderModel.class);
       useNewApi = true;
       log.infof("Using new BrokeredIdentityContext(IdentityProviderModel) constructor");
     } catch (NoSuchMethodException e) {
-      // Fall back to old API: BrokeredIdentityContext(String)
       try {
         constructor = BrokeredIdentityContext.class.getConstructor(String.class);
         log.infof("Using old BrokeredIdentityContext(String) constructor");
 
-        // Check if setIdpConfig method exists
         try {
           setIdpConfigMethod = BrokeredIdentityContext.class.getMethod("setIdpConfig",
-              OAuth2IdentityProviderConfig.class);
-          log.infof("setIdpConfig method available");
-        } catch (NoSuchMethodException ex) {
-          log.infof("setIdpConfig method not available");
-        }
+            OAuth2IdentityProviderConfig.class);
+        } catch (NoSuchMethodException ex) {}
       } catch (NoSuchMethodException ex) {
-        throw new RuntimeException(
-            "Could not find any compatible BrokeredIdentityContext constructor", ex);
+        throw new RuntimeException("Could not find any compatible BrokeredIdentityContext constructor", ex);
       }
+    }
+
+    // Try to find the setIdp method (it exists in old versions, gone in new ones)
+    try {
+      setIdpMethod = BrokeredIdentityContext.class.getMethod("setIdp",
+        org.keycloak.broker.provider.IdentityProvider.class);
+      log.infof("setIdp(IdentityProvider) method available");
+    } catch (NoSuchMethodException e) {
+      log.infof("setIdp(IdentityProvider) method NOT available (Modern Keycloak)");
     }
 
     USE_NEW_CONTEXT_API = useNewApi;
     CONTEXT_CONSTRUCTOR = constructor;
     SET_IDP_CONFIG_METHOD = setIdpConfigMethod;
+    SET_IDP_METHOD = setIdpMethod;
   }
 
   public GsisAbstractIdentityProvider(KeycloakSession session,
@@ -174,11 +179,22 @@ public abstract class GsisAbstractIdentityProvider
     OAuth2IdentityProviderConfig config = getConfig();
     BrokeredIdentityContext user = createBrokeredIdentityContext(config, username);
 
+    user.setId(username);
+
     user.setUsername(username);
     user.setFirstName(firstname);
     user.setLastName(lastname);
     user.setEmail("");
-    user.setIdp(this);
+
+    if (SET_IDP_METHOD != null) {
+      try {
+        SET_IDP_METHOD.invoke(user, this);
+      } catch (Exception e) {
+        log.warn("Failed to call setIdp via reflection", e);
+      }
+    }
+    // In new versions, setIdp is not needed because the IDP is
+    // linked via the IdentityProviderModel passed in the constructor.
 
     AbstractJsonUserAttributeMapper.storeUserProfileForMapper(user, profile, config.getAlias());
 
