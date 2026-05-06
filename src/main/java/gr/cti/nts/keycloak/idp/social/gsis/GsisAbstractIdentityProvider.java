@@ -18,6 +18,7 @@ package gr.cti.nts.keycloak.idp.social.gsis;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import javax.xml.parsers.SAXParser;
@@ -97,7 +98,7 @@ public abstract class GsisAbstractIdentityProvider
       setIdpConfigMethod = BrokeredIdentityContext.class.getMethod("setIdpConfig", org.keycloak.models.IdentityProviderModel.class);
       log.infof("Detected setIdpConfig(IdentityProviderModel) method");
     } catch (NoSuchMethodException e) {
-      log.infof("setIdpConfig method NOT available on this Keycloak version");
+      log.infof("setIdpConfig method NOT available on this Keycloak version (Modern Keycloak logic applies)");
     }
 
     // Detect setIdp(IdentityProvider) - Was removed in v25.
@@ -105,7 +106,7 @@ public abstract class GsisAbstractIdentityProvider
       setIdpMethod = BrokeredIdentityContext.class.getMethod("setIdp", org.keycloak.broker.provider.IdentityProvider.class);
       log.infof("Detected setIdp(IdentityProvider) method");
     } catch (NoSuchMethodException e) {
-      log.infof("setIdp method NOT available (Modern Keycloak logic applies)");
+      log.infof("setIdp method NOT available on this Keycloak version (Modern Keycloak logic applies)");
     }
 
     USE_NEW_CONTEXT_API = useNewApi;
@@ -369,28 +370,37 @@ public abstract class GsisAbstractIdentityProvider
 
   @Override
   public Response keycloakInitiatedBrowserLogout(KeycloakSession session,
-      UserSessionModel userSession, UriInfo uriInfo, RealmModel realm) {
-    log.infof("keycloakInitiatedBrowserLogout");
-    String logoutUrl = getLogoutUrl();
+                                                 UserSessionModel userSession, UriInfo uriInfo, RealmModel realm) {
 
-    if (logoutUrl == null || logoutUrl.trim().length() == 0) {
+    String logoutUrl = getLogoutUrl();
+    if (logoutUrl == null || logoutUrl.trim().isEmpty()) {
       return null;
     }
 
+    log.infof("Initiating GSIS logout for user session: %s", userSession.getId());
+
     String idToken = getIDTokenForLogout(session, userSession);
     String sessionId = userSession.getId();
-    UriBuilder logoutUri = UriBuilder.fromUri(logoutUrl).queryParam("state", sessionId);
+
+    UriBuilder logoutUri = UriBuilder.fromUri(logoutUrl);
+    OAuth2IdentityProviderConfig config = getConfig();
+    String redirectUri = RealmsResource.brokerUrl(uriInfo)
+      .path(IdentityBrokerService.class, "getEndpoint")
+      .path(OIDCEndpoint.class, "logoutResponse")
+      .queryParam("state", sessionId)
+      .build(realm.getName(), config.getAlias())
+      .toString();
+    UriBuilder finalUri = logoutUri.queryParam("state", sessionId);
 
     if (idToken != null) {
-      logoutUri.queryParam("id_token_hint", idToken);
+      finalUri.queryParam("id_token_hint", idToken);
     }
 
-    OAuth2IdentityProviderConfig config = getConfig();
-    String redirect = RealmsResource.brokerUrl(uriInfo)
-        .path(IdentityBrokerService.class, "getEndpoint").path(OIDCEndpoint.class, "logoutResponse")
-        .queryParam("state", sessionId).build(realm.getName(), config.getAlias()).toString();
-    logoutUri.queryParam("url", redirect);
+    finalUri.queryParam("url", redirectUri);
+    URI builtUri = finalUri.build(config.getClientId());
 
-    return Response.status(302).location(logoutUri.build(config.getClientId())).build();
+    log.infof("Logout Uri: %s", builtUri.toString());
+
+    return Response.status(302).location(builtUri).build();
   }
 }
