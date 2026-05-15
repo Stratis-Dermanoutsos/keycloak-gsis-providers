@@ -30,17 +30,12 @@ import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.util.Time;
-import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
-import org.keycloak.events.EventType;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.representations.AccessTokenResponse;
-import org.keycloak.services.ErrorPage;
 import org.keycloak.services.managers.AuthenticationManager;
-import org.keycloak.services.messages.Messages;
-import org.keycloak.services.resources.IdentityBrokerService;
 import org.keycloak.services.resources.RealmsResource;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.vault.VaultStringSecret;
@@ -50,9 +45,6 @@ import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.ws.rs.GET;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.core.UriInfo;
@@ -288,44 +280,6 @@ public abstract class GsisAbstractIdentityProvider
         AbstractOAuth2IdentityProvider<OAuth2IdentityProviderConfig> provider) {
       super(callback, realm, event, provider);
     }
-
-    @GET
-    @Path("logout_response")
-    public Response logoutResponse(@QueryParam("state") String state) {
-      if (state == null) {
-        logger.error("no state parameter returned");
-        EventBuilder event = new EventBuilder(realm, session, clientConnection);
-        event.event(EventType.LOGOUT);
-        event.error(Errors.USER_SESSION_NOT_FOUND);
-
-        return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
-            Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
-      }
-
-      UserSessionModel userSession = session.sessions().getUserSession(realm, state);
-      if (userSession == null) {
-        logger.error("no valid user session");
-        EventBuilder event = new EventBuilder(realm, session, clientConnection);
-        event.event(EventType.LOGOUT);
-        event.error(Errors.USER_SESSION_NOT_FOUND);
-
-        return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
-            Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
-      }
-
-      if (userSession.getState() != UserSessionModel.State.LOGGING_OUT) {
-        logger.error("usersession in different state");
-        EventBuilder event = new EventBuilder(realm, session, clientConnection);
-        event.event(EventType.LOGOUT);
-        event.error(Errors.USER_SESSION_NOT_FOUND);
-
-        return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
-            Messages.SESSION_NOT_ACTIVE);
-      }
-
-      return AuthenticationManager.finishBrowserLogout(session, realm, userSession,
-          session.getContext().getUri(), clientConnection, headers);
-    }
   }
 
   /**
@@ -379,28 +333,34 @@ public abstract class GsisAbstractIdentityProvider
 
     log.infof("Initiating GSIS logout for user session: %s", userSession.getId());
 
-    String idToken = getIDTokenForLogout(session, userSession);
-    String sessionId = userSession.getId();
-
-    UriBuilder logoutUri = UriBuilder.fromUri(logoutUrl);
     OAuth2IdentityProviderConfig config = getConfig();
-    String redirectUri = RealmsResource.brokerUrl(uriInfo)
-      .path(IdentityBrokerService.class, "getEndpoint")
-      .path(OIDCEndpoint.class, "logoutResponse")
-      .queryParam("state", sessionId)
-      .build(realm.getName(), config.getAlias())
-      .toString();
-    UriBuilder finalUri = logoutUri.queryParam("state", sessionId);
+    String sessionId = userSession.getId();
+    String idToken = getIDTokenForLogout(session, userSession);
 
+    // Subresource dispatch on /broker/{alias}/endpoint/logout_response is broken in
+    // Keycloak 24+ for third-party providers (Quarkus REST ResourceLocatorHandler does not
+    // resolve the returned class). Finish the local Keycloak logout inline and use GSIS's
+    // url= parameter to send the user directly to the final post-logout destination.
+    Response finishResp = AuthenticationManager.finishBrowserLogout(session, realm, userSession,
+        uriInfo, session.getContext().getConnection(), session.getContext().getRequestHeaders());
+
+    String postLogoutUri = finishResp.getLocation() != null
+        ? finishResp.getLocation().toString()
+        : RealmsResource.realmBaseUrl(uriInfo).build(realm.getName()).toString();
+
+    UriBuilder logoutUri = UriBuilder.fromUri(logoutUrl).queryParam("state", sessionId);
     if (idToken != null) {
-      finalUri.queryParam("id_token_hint", idToken);
+      logoutUri.queryParam("id_token_hint", idToken);
     }
-
-    finalUri.queryParam("url", redirectUri);
-    URI builtUri = finalUri.build(config.getClientId());
+    logoutUri.queryParam("url", postLogoutUri);
+    URI builtUri = logoutUri.build(config.getClientId());
 
     log.infof("Logout Uri: %s", builtUri.toString());
 
-    return Response.status(302).location(builtUri).build();
+    Response.ResponseBuilder builder = Response.status(302).location(builtUri);
+    if (finishResp.getCookies() != null) {
+      finishResp.getCookies().values().forEach(builder::cookie);
+    }
+    return builder.build();
   }
 }
