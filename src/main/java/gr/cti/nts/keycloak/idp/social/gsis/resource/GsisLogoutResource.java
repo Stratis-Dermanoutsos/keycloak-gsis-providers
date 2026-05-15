@@ -36,6 +36,7 @@ public class GsisLogoutResource {
       EventBuilder event = new EventBuilder(realm, session, session.getContext().getConnection());
       event.event(EventType.LOGOUT);
       event.error(Errors.USER_SESSION_NOT_FOUND);
+
       return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
           Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
     }
@@ -46,15 +47,17 @@ public class GsisLogoutResource {
       EventBuilder event = new EventBuilder(realm, session, session.getContext().getConnection());
       event.event(EventType.LOGOUT);
       event.error(Errors.USER_SESSION_NOT_FOUND);
+
       return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
           Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
     }
 
     if (userSession.getState() != UserSessionModel.State.LOGGING_OUT) {
-      log.error("User session in different state");
+      log.error("usersession in different state");
       EventBuilder event = new EventBuilder(realm, session, session.getContext().getConnection());
       event.event(EventType.LOGOUT);
       event.error(Errors.USER_SESSION_NOT_FOUND);
+
       return ErrorPage.error(session, null, Response.Status.BAD_REQUEST,
           Messages.SESSION_NOT_ACTIVE);
     }
