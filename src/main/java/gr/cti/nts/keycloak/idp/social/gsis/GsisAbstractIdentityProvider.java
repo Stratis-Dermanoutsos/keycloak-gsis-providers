@@ -70,17 +70,17 @@ public abstract class GsisAbstractIdentityProvider
     java.lang.reflect.Method setIdpConfigMethod = null;
     java.lang.reflect.Method setIdpMethod = null;
 
-    // Detect Constructor (String vs IdentityProviderModel)
     try {
-      // Keycloak 24+
-      constructor = BrokeredIdentityContext.class.getConstructor(org.keycloak.models.IdentityProviderModel.class);
+      // Try new API: BrokeredIdentityContext(IdentityProviderModel)
+      constructor = BrokeredIdentityContext.class
+        .getConstructor(org.keycloak.models.IdentityProviderModel.class);
       useNewApi = true;
-      log.infof("Detected Modern BrokeredIdentityContext(IdentityProviderModel) constructor");
+      log.infof("Using new BrokeredIdentityContext(IdentityProviderModel) constructor");
     } catch (NoSuchMethodException e) {
+      // Fall back to old API: BrokeredIdentityContext(String)
       try {
-        // Keycloak 22 and older
         constructor = BrokeredIdentityContext.class.getConstructor(String.class);
-        log.infof("Detected Legacy BrokeredIdentityContext(String) constructor");
+        log.infof("Using old BrokeredIdentityContext(String) constructor");
       } catch (NoSuchMethodException ex) {
         throw new RuntimeException("Could not find any compatible BrokeredIdentityContext constructor", ex);
       }
@@ -145,20 +145,24 @@ public abstract class GsisAbstractIdentityProvider
   private BrokeredIdentityContext createBrokeredIdentityContext(OAuth2IdentityProviderConfig config, String username) {
     try {
       BrokeredIdentityContext context;
+
       if (USE_NEW_CONTEXT_API) {
+        // New API: BrokeredIdentityContext(IdentityProviderModel)
         context = (BrokeredIdentityContext) CONTEXT_CONSTRUCTOR.newInstance(config);
       } else {
+        // Old API: BrokeredIdentityContext(String)
         context = (BrokeredIdentityContext) CONTEXT_CONSTRUCTOR.newInstance(username);
       }
 
-      // Use the reflected method to avoid signature mismatches
+      // Call setIdpConfig if the method exists
       if (SET_IDP_CONFIG_METHOD != null) {
         SET_IDP_CONFIG_METHOD.invoke(context, config);
       }
 
       return context;
     } catch (Exception e) {
-      throw new RuntimeException("Failed to create context via reflection", e);
+      throw new RuntimeException(
+        "Failed to create BrokeredIdentityContext for username: " + username, e);
     }
   }
 

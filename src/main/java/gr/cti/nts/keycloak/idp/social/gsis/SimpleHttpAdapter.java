@@ -46,7 +46,7 @@ public class SimpleHttpAdapter {
     try {
       // Try New API (Keycloak 24+)
       httpClass = Class.forName(NEW_CLASS);
-      log.infof("Detected New SimpleHttp API at %s", NEW_CLASS);
+      log.infof("Using new SimpleHttp API at %s", NEW_CLASS);
 
       // New API uses: SimpleHttp.create(session).doGet(url)
       factoryMethod = httpClass.getMethod("create", KeycloakSession.class);
@@ -57,7 +57,7 @@ public class SimpleHttpAdapter {
       // Fall back to old API
       try {
         httpClass = Class.forName(OLD_CLASS);
-        log.infof("Detected Old SimpleHttp API at %s", OLD_CLASS);
+        log.infof("Using old SimpleHttp API at %s", OLD_CLASS);
 
         // Old API uses: SimpleHttp.doGet(url, session)
         getMethod = httpClass.getMethod("doGet", String.class, KeycloakSession.class);
