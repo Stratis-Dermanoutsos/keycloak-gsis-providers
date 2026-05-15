@@ -36,7 +36,6 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.services.managers.AuthenticationManager;
-import org.keycloak.services.resources.RealmsResource;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.vault.VaultStringSecret;
 import org.xml.sax.Attributes;
@@ -45,6 +44,8 @@ import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import gr.cti.nts.keycloak.idp.social.gsis.resource.GsisLogoutResource;
+import gr.cti.nts.keycloak.idp.social.gsis.resource.GsisLogoutResourceProviderFactory;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.core.UriInfo;
@@ -337,30 +338,29 @@ public abstract class GsisAbstractIdentityProvider
     String sessionId = userSession.getId();
     String idToken = getIDTokenForLogout(session, userSession);
 
-    // Subresource dispatch on /broker/{alias}/endpoint/logout_response is broken in
-    // Keycloak 24+ for third-party providers (Quarkus REST ResourceLocatorHandler does not
-    // resolve the returned class). Finish the local Keycloak logout inline and use GSIS's
-    // url= parameter to send the user directly to the final post-logout destination.
-    Response finishResp = AuthenticationManager.finishBrowserLogout(session, realm, userSession,
-        uriInfo, session.getContext().getConnection(), session.getContext().getRequestHeaders());
-
-    String postLogoutUri = finishResp.getLocation() != null
-        ? finishResp.getLocation().toString()
-        : RealmsResource.realmBaseUrl(uriInfo).build(realm.getName()).toString();
+    // Point GSIS at a RealmResourceProvider endpoint that completes the Keycloak-side logout.
+    // We can't use a @Path subresource on OIDCEndpoint here because Keycloak 24+ (Quarkus REST)
+    // doesn't route subclass @Path methods returned from IdentityBrokerService.getEndpoint(),
+    // even with a Jandex index. RealmResourceProvider gives us a first-class top-level path.
+    // NOTE: GSIS validates `url=` against the registered redirect URI. If GSIS does strict
+    // prefix-matching (only paths under /broker/{alias}/endpoint), this URL will be rejected
+    // and the user will fall back to the registered redirect URI as before. In that case,
+    // the registered URL with GSIS needs to be widened, or use the authResponse-override path.
+    String redirectUri = UriBuilder.fromUri(uriInfo.getBaseUri())
+        .path("realms").path(realm.getName())
+        .path(GsisLogoutResourceProviderFactory.ID)
+        .path(GsisLogoutResource.LOGOUT_RESPONSE_PATH)
+        .queryParam("state", sessionId)
+        .build()
+        .toString();
 
     UriBuilder logoutUri = UriBuilder.fromUri(logoutUrl).queryParam("state", sessionId);
     if (idToken != null) {
       logoutUri.queryParam("id_token_hint", idToken);
     }
-    logoutUri.queryParam("url", postLogoutUri);
+    logoutUri.queryParam("url", redirectUri);
     URI builtUri = logoutUri.build(config.getClientId());
 
-    log.infof("Logout Uri: %s", builtUri.toString());
-
-    Response.ResponseBuilder builder = Response.status(302).location(builtUri);
-    if (finishResp.getCookies() != null) {
-      finishResp.getCookies().values().forEach(builder::cookie);
-    }
-    return builder.build();
+    return Response.status(302).location(builtUri).build();
   }
 }
