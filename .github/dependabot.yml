@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
+    cooldown:
+      default-days: 7
     schedule:
       interval: monthly
     groups:
@@ -10,5 +12,14 @@ updates:
           - "*"
   - package-ecosystem: "maven"
     directory: "/"
+    cooldown:
+      default-days: 7
     schedule:
-      interval: monthly
+      interval: "monthly"
+    groups:
+      maven:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
