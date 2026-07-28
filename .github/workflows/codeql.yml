@@ -1,4 +1,4 @@
-name: 'CodeQL'
+name: "CodeQL"
 
 on:
   push:
@@ -8,17 +8,30 @@ on:
     branches:
       - main
   schedule:
-    - cron: '36 0 * * 3'
+    - cron: "36 0 * * 3"
   workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
-      actions: read
+      actions: read # required to read the workflow run for CodeQL analysis
       contents: read
-      security-events: write
+      security-events: write # required to upload CodeQL SARIF results
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - actions
+          - java
 
     steps:
       - name: Clone repository
@@ -27,22 +40,24 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK
+        if: matrix.language == 'java'
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
           cache: maven
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          languages: 'java'
-          queries: security-extended,security-and-quality
+          languages: ${{ matrix.language }}
+          queries: +security-and-quality
 
       - name: Autobuild
+        if: matrix.language == 'java'
         uses: github/codeql-action/autobuild@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          category: '/language:java'
+          category: "/language:${{ matrix.language }}"

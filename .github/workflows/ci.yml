@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "!dependabot/**"
   pull_request:
   workflow_dispatch:
 
@@ -17,11 +18,13 @@ jobs:
   build:
     name: Java ${{ matrix.java }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        java: ['17', '21', '25']
+        java: ["17", "21", "25"]
+
     steps:
       - name: Clone repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -32,7 +35,7 @@ jobs:
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
         with:
           java-version: ${{ matrix.java }}
-          distribution: 'temurin'
+          distribution: "temurin"
           cache: maven
 
       - name: Extract version
