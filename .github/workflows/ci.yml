@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    name: Java ${{ matrix.java }}
+    name: Java ${{ matrix.java }}, Keycloak ${{ matrix.keycloak }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -24,6 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         java: ["17", "21", "25"]
+        keycloak: ["22.0.5", "26.1.3"]
 
     steps:
       - name: Clone repository
@@ -43,9 +44,11 @@ jobs:
         run: echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
 
       - name: Build
-        run: mvn -B package -Djava.version=${{ matrix.java }} -Dbuild.java=${{ matrix.java }}
+        run: mvn -B package -Djava.version=${{ matrix.java }} -Dbuild.java=${{ matrix.java }} -Dkeycloak.version=${{ matrix.keycloak }}
 
+      # The jar works on every supported Keycloak version, so upload it once per Java version
       - name: Upload jar file
+        if: matrix.keycloak == '22.0.5'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: keycloak-gsis-providers-java-${{ matrix.java }}-v${{ steps.version.outputs.version }}
