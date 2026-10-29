@@ -27,7 +27,6 @@ import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
-import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.util.Time;
 import org.keycloak.events.Errors;
@@ -119,8 +118,8 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
     String jsonStringProfile = "";
 
     try {
-      SimpleHttp request = SimpleHttp.doGet(profileUrl, session);
-      String profile = request.header("Authorization", "Bearer " + accessToken).asString();
+      String profile = SimpleHttpAdapter.doGet(profileUrl, session)
+          .header("Authorization", "Bearer " + accessToken).asString();
 
       SAXParserFactory parserFactory = SAXParserFactory.newInstance();
       parserFactory.setValidating(false);
@@ -201,12 +200,6 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
       super(callback, realm, event, provider);
     }
 
-    @Override
-    public SimpleHttp generateTokenRequest(String authorizationCode) {
-      SimpleHttp simpleHttp = super.generateTokenRequest(authorizationCode);
-      return simpleHttp;
-    }
-
     @GET
     @Path("logout_response")
     public Response logoutResponse(@QueryParam("state") String state) {
@@ -260,20 +253,24 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
     String clientSecret = config.getClientSecret();
 
     try (VaultStringSecret vaultStringSecret = session.vault().getStringSecret(clientSecret)) {
-      return getRefreshTokenRequest(session, refreshToken, config.getClientId(),
+      return buildRefreshTokenRequest(session, refreshToken, config.getClientId(),
           vaultStringSecret.get().orElse(clientSecret)).asString();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
   }
 
-  protected SimpleHttp getRefreshTokenRequest(KeycloakSession session, String refreshToken,
-      String clientId, String clientSecret) {
-    SimpleHttp refreshTokenRequest = SimpleHttp.doPost(getConfig().getTokenUrl(), session)
+  // Not named getRefreshTokenRequest(), which Keycloak 26.4+ declares in the superclass with a
+  // SimpleHttpRequest return type.
+  protected SimpleHttpAdapter buildRefreshTokenRequest(KeycloakSession session,
+      String refreshToken, String clientId, String clientSecret) {
+    // authenticateTokenRequest() is typed to the version-specific SimpleHttp class, so send the
+    // client credentials as form parameters (client_secret_post) instead.
+    return SimpleHttpAdapter.doPost(getConfig().getTokenUrl(), session)
         .param(OAUTH2_GRANT_TYPE_REFRESH_TOKEN, refreshToken)
-        .param(OAUTH2_PARAMETER_GRANT_TYPE, OAUTH2_GRANT_TYPE_REFRESH_TOKEN);
-
-    return authenticateTokenRequest(refreshTokenRequest);
+        .param(OAUTH2_PARAMETER_GRANT_TYPE, OAUTH2_GRANT_TYPE_REFRESH_TOKEN)
+        .param(OAUTH2_PARAMETER_CLIENT_ID, clientId)
+        .param(OAUTH2_PARAMETER_CLIENT_SECRET, clientSecret);
   }
 
   @Override
