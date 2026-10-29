@@ -64,7 +64,10 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
   // Keycloak 22 creates the context from the user id and links the IdP through setIdpConfig() and
   // setIdp(). Newer versions take the IdentityProviderModel in the constructor and no longer have
   // setIdpConfig(). Resolve what is available once, so the same jar links on both.
+  // (String, IdentityProviderModel) is what Keycloak's own providers use on 26.x and the only
+  // option on 25.0 - 26.2.
   private static final List<Class<?>[]> CONTEXT_CONSTRUCTOR_SIGNATURES = List.of(
+      new Class<?>[] {String.class, IdentityProviderModel.class},
       new Class<?>[] {IdentityProviderModel.class},
       new Class<?>[] {String.class});
 
