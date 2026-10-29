@@ -31,7 +31,6 @@ import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
-import org.keycloak.broker.provider.IdentityProvider;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.util.Time;
 import org.keycloak.events.EventBuilder;
@@ -74,8 +73,10 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
   private static final Constructor<BrokeredIdentityContext> CONTEXT_CONSTRUCTOR =
       findContextConstructor();
   private static final Method SET_IDP_CONFIG =
-      findContextMethod("setIdpConfig", IdentityProviderModel.class);
-  private static final Method SET_IDP = findContextMethod("setIdp", IdentityProvider.class);
+      findContextMethod("setIdpConfig", OAuth2IdentityProviderConfig.class);
+  // Takes IdentityProvider up to 26.4 and UserAuthenticationIdentityProvider<?> from 26.5
+  private static final Method SET_IDP =
+      findContextMethod("setIdp", GsisAbstractIdentityProvider.class);
 
   public GsisAbstractIdentityProvider(KeycloakSession session,
       OAuth2IdentityProviderConfig config) {
@@ -118,12 +119,11 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
     throw new IllegalStateException("No supported BrokeredIdentityContext constructor found");
   }
 
-  private static Method findContextMethod(String name, Class<?> parameterType) {
-    try {
-      return BrokeredIdentityContext.class.getMethod(name, parameterType);
-    } catch (NoSuchMethodException e) {
-      return null;
-    }
+  private static Method findContextMethod(String name, Class<?> argumentType) {
+    return Arrays.stream(BrokeredIdentityContext.class.getMethods())
+        .filter(method -> method.getName().equals(name) && method.getParameterCount() == 1
+            && method.getParameterTypes()[0].isAssignableFrom(argumentType))
+        .findFirst().orElse(null);
   }
 
   private BrokeredIdentityContext createBrokeredIdentityContext(String username,
