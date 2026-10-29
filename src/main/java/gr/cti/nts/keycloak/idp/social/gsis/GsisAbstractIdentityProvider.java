@@ -18,7 +18,11 @@ package gr.cti.nts.keycloak.idp.social.gsis;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
@@ -27,11 +31,13 @@ import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
+import org.keycloak.broker.provider.IdentityProvider;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.util.Time;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.events.EventType;
+import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserSessionModel;
@@ -63,6 +69,19 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
 
   public static final String FEDERATED_ID_TOKEN = "FEDERATED_ID_TOKEN";
 
+  // Keycloak 22 creates the context from the user id and links the IdP through setIdpConfig() and
+  // setIdp(). Newer versions take the IdentityProviderModel in the constructor and no longer have
+  // setIdpConfig(). Resolve what is available once, so the same jar links on both.
+  private static final List<Class<?>[]> CONTEXT_CONSTRUCTOR_SIGNATURES = List.of(
+      new Class<?>[] {IdentityProviderModel.class},
+      new Class<?>[] {String.class});
+
+  private static final Constructor<BrokeredIdentityContext> CONTEXT_CONSTRUCTOR =
+      findContextConstructor();
+  private static final Method SET_IDP_CONFIG =
+      findContextMethod("setIdpConfig", IdentityProviderModel.class);
+  private static final Method SET_IDP = findContextMethod("setIdp", IdentityProvider.class);
+
   public GsisAbstractIdentityProvider(KeycloakSession session,
       OAuth2IdentityProviderConfig config) {
     super(session, config);
@@ -90,6 +109,48 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
     return true;
   }
 
+  private static Constructor<BrokeredIdentityContext> findContextConstructor() {
+    for (Class<?>[] signature : CONTEXT_CONSTRUCTOR_SIGNATURES) {
+      try {
+        Constructor<BrokeredIdentityContext> constructor =
+            BrokeredIdentityContext.class.getConstructor(signature);
+        log.infof("Using %s", constructor);
+        return constructor;
+      } catch (NoSuchMethodException e) {
+        // try the next one
+      }
+    }
+    throw new IllegalStateException("No supported BrokeredIdentityContext constructor found");
+  }
+
+  private static Method findContextMethod(String name, Class<?> parameterType) {
+    try {
+      return BrokeredIdentityContext.class.getMethod(name, parameterType);
+    } catch (NoSuchMethodException e) {
+      return null;
+    }
+  }
+
+  private BrokeredIdentityContext createBrokeredIdentityContext(String username,
+      OAuth2IdentityProviderConfig config) {
+    Object[] args = Arrays.stream(CONTEXT_CONSTRUCTOR.getParameterTypes())
+        .map(type -> type == String.class ? username : config).toArray();
+
+    try {
+      BrokeredIdentityContext context = CONTEXT_CONSTRUCTOR.newInstance(args);
+      if (SET_IDP_CONFIG != null) {
+        SET_IDP_CONFIG.invoke(context, config);
+      }
+      if (SET_IDP != null) {
+        SET_IDP.invoke(context, this);
+      }
+      return context;
+    } catch (ReflectiveOperationException e) {
+      throw new IdentityBrokerException(
+          "Could not create BrokeredIdentityContext for user " + username, e);
+    }
+  }
+
   @Override
   protected BrokeredIdentityContext extractIdentityFromProfile(EventBuilder event,
       JsonNode profile) {
@@ -97,15 +158,14 @@ public abstract class GsisAbstractIdentityProvider extends AbstractOAuth2Identit
     String firstname = getJsonProperty(profile, "firstname");
     String lastname = getJsonProperty(profile, "lastname");
 
-    BrokeredIdentityContext user = new BrokeredIdentityContext(username);
     OAuth2IdentityProviderConfig config = getConfig();
+    BrokeredIdentityContext user = createBrokeredIdentityContext(username, config);
 
+    user.setId(username);
     user.setUsername(username);
     user.setFirstName(firstname);
     user.setLastName(lastname);
     user.setEmail("");
-    user.setIdpConfig(config);
-    user.setIdp(this);
 
     AbstractJsonUserAttributeMapper.storeUserProfileForMapper(user, profile, config.getAlias());
 
